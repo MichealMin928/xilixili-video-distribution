@@ -21,9 +21,8 @@ export function adaptCopy(base: PlatformCopy, platform: PlatformId): PlatformCop
 }
 
 export function renderBody(copy: PlatformCopy, platform: PlatformId): string {
-  if (!copy.hashtags.length) return copy.body;
-  const tags = platform === 'xiaohongshu'
-    ? copy.hashtags.map((tag) => `#${tag}#`).join(' ')
-    : copy.hashtags.map((tag) => `#${tag}`).join(' ');
+  // 小红书话题需要从平台原生候选中选择；普通文本 #话题# 不会形成可点击话题。
+  if (!copy.hashtags.length || platform === 'xiaohongshu') return copy.body;
+  const tags = copy.hashtags.map((tag) => `#${tag}`).join(' ');
   return `${copy.body}\n\n${tags}`.trim();
 }

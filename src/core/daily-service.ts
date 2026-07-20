@@ -43,6 +43,7 @@ export class DailyService {
       date: plan.date,
       manifestPath: path.relative(projectRoot, plan.manifestPath),
       title: plan.manifest.title,
+      watermarkFreeConfirmed: plan.manifest.watermarkFreeConfirmed,
       targets: plan.manifest.targets,
       existingJobId: plan.existingJob?.id,
       schedule: plan.schedule,
@@ -56,15 +57,6 @@ export class DailyService {
       shanghaiDate(),
       force,
     );
-    const accountChecks = [];
-    for (const platform of plan.manifest.targets) {
-      accountChecks.push(await this.orchestrator.checkLogin(platform));
-    }
-    const unavailable = accountChecks.filter((account) => account.status !== 'logged_in');
-    if (unavailable.length) {
-      throw new Error(`以下平台需要先人工登录或验证：${unavailable.map((item) => item.platform).join('、')}`);
-    }
-
     const job = plan.existingJob ?? await this.orchestrator.createJob({
       ...plan.manifest,
       scheduleDate: plan.date,
@@ -74,6 +66,9 @@ export class DailyService {
     const alreadyPrepared = new Set(preparedPlatforms(job));
     const pendingTargets = job.targets.filter((platform) => !alreadyPrepared.has(platform));
     const results = pendingTargets.length ? await this.orchestrator.prepare(job.id, pendingTargets) : [];
+    const retryTargets = results
+      .filter((result) => result.status !== 'success')
+      .map((result) => result.platform);
     return {
       date: plan.date,
       jobId: job.id,
@@ -81,7 +76,12 @@ export class DailyService {
       reused: Boolean(plan.existingJob),
       preparedBefore: [...alreadyPrepared],
       preparedNow: results,
-      next: '保持运营台服务运行并检查四个平台预览；到计划时间后手工发布指定平台。',
+      retryTargets,
+      next: retryTargets.length
+        ? `只需处理以下未成功平台：${retryTargets.join('、')}；再次运行时不会触碰已成功平台。`
+        : pendingTargets.length
+          ? '本次待处理平台已完成预填；已成功平台会保留原页面。'
+          : '所有目标平台此前均已预填成功，本次未打开或刷新任何平台页面。',
     };
   }
 

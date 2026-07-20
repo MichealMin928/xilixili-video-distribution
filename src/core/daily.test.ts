@@ -37,6 +37,7 @@ describe('每日手工一键运营', () => {
   it('兼容没有来源字段的旧任务并按内容去重', () => {
     const matched = matchingJob(state, '/workspace/content/manifest.json', {
       kind: 'gallery',
+      watermarkFreeConfirmed: false,
       mediaPaths: ['/workspace/content/a.png'],
       title: '酒店投影现场先看什么',
       body: '新正文也不应造成同素材同标题重复发布',

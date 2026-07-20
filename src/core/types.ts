@@ -58,6 +58,7 @@ export interface PublishJob {
   updatedAt: string;
   status: JobStatus;
   kind: ContentKind;
+  watermarkFreeConfirmed?: boolean;
   mediaPaths: string[];
   baseCopy: PlatformCopy;
   variants: Record<PlatformId, PlatformCopy>;

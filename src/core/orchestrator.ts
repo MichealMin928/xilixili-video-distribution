@@ -5,6 +5,7 @@ import { BrowserManager } from '../browser/manager.js';
 import { PlatformAdapter } from '../platforms/adapter.js';
 import { platformConfigs } from '../platforms/config.js';
 import { adaptCopy } from './copy.js';
+import { assertPublicFacingCopy, assertWatermarkFreeVideo } from './content-policy.js';
 import { projectRoot } from './paths.js';
 import { createPublicationPlan, shanghaiDate } from './schedule.js';
 import { Store } from './store.js';
@@ -12,6 +13,7 @@ import { platformIds, type PlatformId, type PlatformResult, type PublishJob } fr
 
 const createJobSchema = z.object({
   kind: z.enum(['video', 'gallery']),
+  watermarkFreeConfirmed: z.boolean().default(false),
   mediaPaths: z.array(z.string().min(1)).min(1),
   title: z.string().min(1),
   body: z.string().min(1),
@@ -34,6 +36,7 @@ export class Orchestrator {
   async createJob(input: CreateJobInput): Promise<PublishJob> {
     const parsed = createJobSchema.parse(input);
     const baseCopy = { title: parsed.title, body: parsed.body, hashtags: parsed.hashtags };
+    assertPublicFacingCopy(baseCopy);
     const now = new Date().toISOString();
     const job: PublishJob = {
       id: `${now.slice(0, 10).replaceAll('-', '')}-${randomUUID().slice(0, 8)}`,
@@ -41,6 +44,7 @@ export class Orchestrator {
       updatedAt: now,
       status: 'ready',
       kind: parsed.kind,
+      watermarkFreeConfirmed: parsed.kind === 'gallery' || parsed.watermarkFreeConfirmed,
       mediaPaths: parsed.mediaPaths.map((item) => path.isAbsolute(item) ? item : path.resolve(projectRoot, item)),
       baseCopy,
       variants: Object.fromEntries(
@@ -94,6 +98,8 @@ export class Orchestrator {
 
   async prepare(jobId: string, targets?: PlatformId[]) {
     const job = await this.store.getJob(jobId);
+    assertWatermarkFreeVideo(job.kind, job.watermarkFreeConfirmed);
+    assertPublicFacingCopy(job.baseCopy);
     const selected = targets?.length ? targets : job.targets;
     await this.store.update((state) => {
       const current = state.jobs.find((item) => item.id === jobId)!;
@@ -138,6 +144,7 @@ export class Orchestrator {
   async publish(jobId: string, confirmation: string, targets?: PlatformId[]) {
     if (confirmation !== jobId) throw new Error(`发布确认文字必须等于任务编号：${jobId}`);
     const job = await this.store.getJob(jobId);
+    assertWatermarkFreeVideo(job.kind, job.watermarkFreeConfirmed);
     const selected = targets?.length ? targets : job.targets;
 
     await this.store.update((state) => {
@@ -190,6 +197,7 @@ export class Orchestrator {
   async scheduleNative(jobId: string, confirmation: string, platform: PlatformId) {
     if (confirmation !== jobId) throw new Error(`定时发布确认文字必须等于任务编号：${jobId}`);
     const job = await this.store.getJob(jobId);
+    assertWatermarkFreeVideo(job.kind, job.watermarkFreeConfirmed);
     const result = await this.adapters[platform].scheduleNative(job);
 
     await this.store.update((state) => {
