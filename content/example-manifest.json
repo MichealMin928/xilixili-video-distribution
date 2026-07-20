@@ -1,5 +1,6 @@
 {
   "kind": "video",
+  "watermarkFreeConfirmed": false,
   "mediaPaths": [
     "/absolute/path/to/your-video.mp4"
   ],

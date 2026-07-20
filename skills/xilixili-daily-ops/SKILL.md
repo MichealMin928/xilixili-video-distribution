@@ -58,7 +58,8 @@ xilixili-daily start [content/.../manifest.json]
 
 - Use `status` to inspect today's jobs.
 - Use `plan` for validation and scheduling without opening platform pages.
-- Use `start` only when the user asks to prepare, prefill, start, or run today's content workflow. It checks all target accounts, creates or reuses the daily job, uploads media, fills copy, and stops before publishing.
+- Use `start` only when the user asks to prepare, prefill, start, or run today's content workflow. It checks only targets that still need work, creates or reuses the daily job, uploads media, fills copy, and stops before publishing.
+- On retry, preserve every successful platform result and its open editor page. Never refresh, re-upload, or refill a platform that already prepared successfully; retry only failed or unfinished targets.
 - Use `--force` only when the user explicitly requests a deliberate repost after the duplicate warning is explained.
 - Read [references/manifest.md](references/manifest.md) before creating or editing a content manifest.
 - Read [references/platform-publishing.md](references/platform-publishing.md) before preparing or scheduling a four-platform gallery.
@@ -69,7 +70,8 @@ Publish only after the user explicitly names or approves the task and target pla
 
 1. Run `xilixili-daily status`.
 2. Verify that the platform is in the task, has a successful prepare result, and has not already been submitted.
-3. Prefer the platform's native scheduler and run one platform at a time:
+3. For video, verify that the task records a completed watermark-free check. Do not publish when the media contains a platform/AI watermark, website, or QR code.
+4. Prefer the platform's native scheduler and run one platform at a time:
 
 ```bash
 xilixili-daily schedule <job-id> <douyin|xiaohongshu|kuaishou|wechat_channels>
@@ -83,7 +85,7 @@ Use immediate publishing only when the user explicitly requests an immediate rel
 xilixili-daily publish <job-id> <douyin|xiaohongshu|kuaishou|wechat_channels>
 ```
 
-Report `needs_verification` as unresolved even if the publish button was clicked. Do not retry a publish automatically because a retry can create duplicates.
+Report `needs_verification` as unresolved even if the publish button was clicked. Do not retry a publish automatically because a retry can create duplicates. Never delete matching works as part of retry or cleanup.
 Apply the tag, music, native-time, and success-marker rules in [references/platform-publishing.md](references/platform-publishing.md).
 
 ## Manage the weekly schedule

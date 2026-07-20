@@ -22,6 +22,7 @@ Use these preferred counts unless the platform rejects one:
 | WeChat Channels | 3 | `#标签` |
 
 Do not pad with unrelated trending tags. If a platform rejects a tag, remove only that tag and keep the remaining order.
+For Xiaohongshu, enter each topic through the platform's native topic picker and select the exact suggested candidate. Do not leave plain `#标签#` text in the body as a substitute for native topics.
 
 ## Music
 
@@ -41,12 +42,22 @@ Do not pad with unrelated trending tags. If a platform rejects a tag, remove onl
 - Record the time selected by the platform. Never retry an ambiguous submit because it can create a duplicate.
 - Use `xilixili-daily publish` only for an explicitly requested immediate release.
 
+## Retry and editor state
+
+- Reuse an already open creator page when it belongs to the intended platform. Do not replace it with a new login or upload page during login checks.
+- Retry only failed or unfinished platforms. Preserve successful pages, uploads, results, and native schedule state.
+- Before immediate publishing, verify that the platform's immediate mode is selected. Before submitting WeChat Channels, compare the filled body with the intended full body rather than accepting a partial fill.
+- On Kuaishou, an already scheduled item may be changed to immediate only after the title match is unique and the user explicitly requested immediate release.
+- Never delete an existing work to make a retry easier.
+
 ## Final check
 
 Before each platform submit:
 
-1. Verify the intended tag count in the filled copy.
-2. Verify the cover is the first image and all pages are present.
-3. Verify approved music: Kuaishou instrumental and any already approved WeChat Channels track.
-4. Verify the native scheduled time is valid and belongs to the workflow date.
-5. Submit only the named platform and record the result before moving to the next platform.
+1. For video, watch the complete final export and verify there is no platform/AI watermark, website, or QR code.
+2. Verify the intended native tag count; on Xiaohongshu, confirm the exact topic suggestions are selected.
+3. Verify the cover is the first image and all pages are present.
+4. Verify approved music: Kuaishou instrumental and any already approved WeChat Channels track.
+5. Verify the full public body is intact, especially on WeChat Channels, and contains no internal production narration.
+6. Verify the native scheduled time is valid and belongs to the workflow date, or confirm immediate mode for an explicitly requested immediate release.
+7. Submit only the named platform and record the result before moving to the next platform.

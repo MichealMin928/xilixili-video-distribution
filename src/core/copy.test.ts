@@ -15,7 +15,7 @@ describe('平台文案适配', () => {
 
   it('按平台生成正确的话题形式', () => {
     const copy = { title: '标题', body: '正文', hashtags: ['江西酒店', '酒店投影'] };
-    expect(renderBody(copy, 'xiaohongshu')).toContain('#江西酒店#');
+    expect(renderBody(copy, 'xiaohongshu')).toBe('正文');
     expect(renderBody(copy, 'douyin')).toContain('#江西酒店 #酒店投影');
   });
 

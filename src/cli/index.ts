@@ -29,7 +29,7 @@ function parsePlatforms(value?: string): PlatformId[] | undefined {
 
 function usage() {
   console.log(`
-洗哩洗哩四平台运营台 CLI
+洗哩洗哩视频分发 CLI
 
   xilixili state
   xilixili doctor

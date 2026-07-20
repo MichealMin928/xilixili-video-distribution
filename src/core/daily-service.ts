@@ -2,9 +2,11 @@ import path from 'node:path';
 import { Orchestrator } from './orchestrator.js';
 import {
   assertPublishTime,
+  immediatelyPublishedPlatforms,
   preparedPlatforms,
   publishedPlatforms,
   resolveDailyPlan,
+  scheduledPlatforms,
 } from './daily.js';
 import { projectRoot } from './paths.js';
 import { shanghaiDate } from './schedule.js';
@@ -43,6 +45,7 @@ export class DailyService {
       date: plan.date,
       manifestPath: path.relative(projectRoot, plan.manifestPath),
       title: plan.manifest.title,
+      watermarkFreeConfirmed: plan.manifest.watermarkFreeConfirmed,
       targets: plan.manifest.targets,
       existingJobId: plan.existingJob?.id,
       schedule: plan.schedule,
@@ -56,15 +59,6 @@ export class DailyService {
       shanghaiDate(),
       force,
     );
-    const accountChecks = [];
-    for (const platform of plan.manifest.targets) {
-      accountChecks.push(await this.orchestrator.checkLogin(platform));
-    }
-    const unavailable = accountChecks.filter((account) => account.status !== 'logged_in');
-    if (unavailable.length) {
-      throw new Error(`以下平台需要先人工登录或验证：${unavailable.map((item) => item.platform).join('、')}`);
-    }
-
     const job = plan.existingJob ?? await this.orchestrator.createJob({
       ...plan.manifest,
       scheduleDate: plan.date,
@@ -74,6 +68,17 @@ export class DailyService {
     const alreadyPrepared = new Set(preparedPlatforms(job));
     const pendingTargets = job.targets.filter((platform) => !alreadyPrepared.has(platform));
     const results = pendingTargets.length ? await this.orchestrator.prepare(job.id, pendingTargets) : [];
+    const retryTargets = results
+      .filter((result) => result.status !== 'success')
+      .map((result) => result.platform);
+    let next: string;
+    if (retryTargets.length) {
+      next = `只需处理以下未成功平台：${retryTargets.join('、')}；再次运行时不会触碰已成功平台。`;
+    } else if (pendingTargets.length) {
+      next = '本次待处理平台已完成预填；已成功平台会保留原页面。';
+    } else {
+      next = '所有目标平台此前均已预填成功，本次未打开或刷新任何平台页面。';
+    }
     return {
       date: plan.date,
       jobId: job.id,
@@ -81,16 +86,23 @@ export class DailyService {
       reused: Boolean(plan.existingJob),
       preparedBefore: [...alreadyPrepared],
       preparedNow: results,
-      next: '保持运营台服务运行并检查四个平台预览；到计划时间后手工发布指定平台。',
+      retryTargets,
+      next,
     };
   }
 
   async publish(jobId: string, platform: PlatformId) {
     const job = await this.orchestrator.store.getJob(jobId);
     if (!job.targets.includes(platform)) throw new Error(`${platform} 不在任务 ${jobId} 的目标平台中`);
-    if (publishedPlatforms(job).includes(platform)) throw new Error(`${platform} 已发布成功，不重复提交`);
+    if (immediatelyPublishedPlatforms(job).includes(platform)) throw new Error(`${platform} 已发布成功，不重复提交`);
     if (!preparedPlatforms(job).includes(platform)) throw new Error(`${platform} 尚未预填成功，不能发布`);
+    const scheduled = scheduledPlatforms(job).includes(platform);
+    if (scheduled && platform !== 'kuaishou') {
+      throw new Error(`${platform} 已提交平台原生定时发布，不能再次提交`);
+    }
     assertPublishTime(job, platform);
-    return this.orchestrator.publish(jobId, jobId, [platform]);
+    return this.orchestrator.publish(jobId, jobId, [platform], {
+      convertScheduledToImmediate: scheduled && platform === 'kuaishou',
+    });
   }
 }

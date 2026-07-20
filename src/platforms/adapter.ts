@@ -7,6 +7,10 @@ import type { AccountState, PlatformResult, PublishJob } from '../core/types.js'
 import { BrowserManager } from '../browser/manager.js';
 import type { PlatformConfig } from './config.js';
 
+export interface PublishOptions {
+  convertScheduledToImmediate?: boolean;
+}
+
 async function firstVisible(page: Page, selectors: string[]): Promise<Locator | undefined> {
   for (const selector of selectors) {
     const locator = page.locator(selector).first();
@@ -43,7 +47,18 @@ export class PlatformAdapter {
   }
 
   async checkLogin(): Promise<AccountState> {
-    const page = await this.browser.open(this.config.id, this.config.homeUrl);
+    let page = await this.browser.getPlatformPage(this.config.id);
+    let currentHost: string | undefined;
+    let platformHost: string | undefined;
+    try {
+      currentHost = new URL(page.url()).hostname;
+      platformHost = new URL(this.config.homeUrl).hostname;
+    } catch {
+      // 新页面通常是 about:blank；只在这种情况下打开首页，保留已有编辑页。
+    }
+    if (!currentHost || currentHost !== platformHost) {
+      page = await this.browser.open(this.config.id, this.config.homeUrl);
+    }
     await page.waitForTimeout(1_500);
     const url = page.url();
     const body = (await page.locator('body').innerText({ timeout: 10_000 }).catch(() => '')).slice(0, 12_000);
@@ -112,13 +127,37 @@ export class PlatformAdapter {
     const title = requiresTitleField
       ? await waitForFirstVisible(page, this.config.titleSelectors, 90_000)
       : undefined;
-    if (title && copy.title) await title.fill(copy.title);
+    if (title && copy.title) {
+      if (this.config.id === 'xiaohongshu') {
+        await title.click();
+        await title.press('Meta+A');
+        await title.pressSequentially(copy.title, { delay: 20 });
+        await title.press('Tab');
+      } else {
+        await title.fill(copy.title);
+      }
+    }
 
     const body = await waitForFirstVisible(page, this.config.bodySelectors, 15_000);
     if (body) {
       const renderedBody = renderBody(copy, this.config.id);
       const value = requiresTitleField ? renderedBody : `${copy.title}\n\n${renderedBody}`;
-      await body.fill(value);
+      if (this.config.id === 'xiaohongshu') {
+        await this.fillXiaohongshuBodyAndTopics(page, body, value, copy.hashtags);
+      } else {
+        await body.fill(value);
+        if (this.config.id === 'wechat_channels') {
+          const actualValue = await body.evaluate((element) => (
+            element instanceof HTMLInputElement || element instanceof HTMLTextAreaElement
+              ? element.value
+              : element.textContent ?? ''
+          ));
+          const normalize = (text: string) => text.replaceAll('\r\n', '\n').trim();
+          if (normalize(actualValue) !== normalize(value)) {
+            throw new Error('视频号正文填入后发生截断或改写，已停在发布前；请精简文案并保留完整话题。');
+          }
+        }
+      }
     }
 
     const screenshot = await this.capture(page, `${job.id}-${this.config.id}-prepared.png`);
@@ -135,9 +174,141 @@ export class PlatformAdapter {
     );
   }
 
-  async publish(job: PublishJob): Promise<PlatformResult> {
+  private async fillXiaohongshuBodyAndTopics(
+    page: Page,
+    body: Locator,
+    value: string,
+    topics: string[],
+  ): Promise<void> {
+    await body.fill(value);
+    if (!topics.length) return;
+
+    const placeCaretAtEnd = async () => body.evaluate((element) => {
+      const html = element as HTMLElement;
+      html.focus();
+      const selection = window.getSelection();
+      const range = document.createRange();
+      range.selectNodeContents(html);
+      range.collapse(false);
+      selection?.removeAllRanges();
+      selection?.addRange(range);
+    });
+
+    await placeCaretAtEnd();
+    await page.keyboard.press('Enter');
+    await page.keyboard.press('Enter');
+
+    for (const topic of topics) {
+      await placeCaretAtEnd();
+      // 小红书只会为真实键盘事件打开原生话题候选列表。
+      await body.pressSequentially(`#${topic}`, { delay: 70 });
+      await page.waitForTimeout(1_200);
+
+      const candidate = await this.findXiaohongshuTopicCandidate(page, topic);
+      if (!candidate) {
+        throw new Error(`小红书未找到话题“${topic}”的原生候选项，已停在发布前。`);
+      }
+
+      await candidate.click();
+      await page.waitForTimeout(350);
+      const editorText = (await body.innerText().catch(() => '')).replace(/\s+/g, ' ');
+      const linkedTopics = [...editorText.matchAll(/#([^#]+)\[话题\]#/g)].map((match) => match[1]);
+      const selectedTopic = linkedTopics.at(-1);
+      if (selectedTopic !== topic) {
+        throw new Error(`小红书话题“${topic}”实际关联为“${selectedTopic ?? '未关联'}”，已停在发布前。`);
+      }
+      await placeCaretAtEnd();
+      await page.keyboard.insertText(' ');
+    }
+
+    const finalText = (await body.innerText().catch(() => '')).replace(/\s+/g, ' ');
+    const missing = topics.filter((topic) => !finalText.includes(topic));
+    if (missing.length) throw new Error(`小红书原生话题核验失败：${missing.join('、')}。`);
+
+    const withoutTopics = topics.reduce(
+      (text, topic) => text.replaceAll(`#${topic}[话题]#`, ''),
+      finalText,
+    ).replace(/\s+/g, ' ').trim();
+    const expectedBody = value.replace(/\s+/g, ' ').trim();
+    if (withoutTopics !== expectedBody) {
+      throw new Error('小红书原生话题写入后正文发生意外变化，已停在发布前。');
+    }
+  }
+
+  private async findXiaohongshuTopicCandidate(page: Page, topic: string): Promise<Locator | undefined> {
+    const selectors = [
+      '[role="option"]',
+      'li',
+      '[class*="topic"]',
+      '[class*="suggest"] [class*="item"]',
+      '[class*="dropdown"] [class*="item"]',
+      '[class*="search"] [class*="item"]',
+      'div',
+      'span',
+    ].join(', ');
+    const candidates = page.locator(selectors);
+    const inspected = await candidates.evaluateAll((elements, expectedTopic) => elements.map((element, index) => {
+      const html = element as HTMLElement;
+      const rect = html.getBoundingClientRect();
+      const style = window.getComputedStyle(html);
+      const text = (html.innerText || html.textContent || '').trim().replace(/\s+/g, ' ');
+      const className = typeof html.className === 'string' ? html.className : '';
+      const visible = rect.width > 0 && rect.height > 0
+        && style.display !== 'none' && style.visibility !== 'hidden';
+      const insideEditor = Boolean(html.closest('[contenteditable="true"]'));
+      const exact = text === expectedTopic || text === `#${expectedTopic}`;
+      const begins = text.startsWith(expectedTopic) || text.startsWith(`#${expectedTopic}`);
+      const prefix = text.startsWith('#') ? `#${expectedTopic}` : expectedTopic;
+      const suffix = begins ? text.slice(prefix.length) : '';
+      const exactBoundary = begins && (suffix.length === 0 || /^[\s\d.万亿]/.test(suffix));
+      const hasTopicMetric = /浏览|参与|笔记/.test(text);
+      return {
+        index,
+        text,
+        className,
+        role: html.getAttribute('role') ?? '',
+        visible,
+        insideEditor,
+        exact,
+        exactBoundary,
+        hasTopicMetric,
+        rect: { x: rect.x, y: rect.y, width: rect.width, height: rect.height },
+      };
+    }), topic);
+
+    const ranked = inspected
+      .filter((item) => item.visible && (!item.insideEditor || item.hasTopicMetric)
+        && item.exactBoundary && item.text.length <= 100)
+      .map((item) => ({
+        ...item,
+        score: (item.exact ? 0 : 10)
+          + (/option|item|topic|suggest/i.test(`${item.role} ${item.className}`) ? 0 : 5)
+          + Math.min(5, item.rect.width * item.rect.height / 100_000),
+      }))
+      .sort((left, right) => left.score - right.score || left.rect.y - right.rect.y);
+
+    return ranked.length ? candidates.nth(ranked[0]!.index) : undefined;
+  }
+
+  async publish(job: PublishJob, options: PublishOptions = {}): Promise<PlatformResult> {
+    const pendingPublishUrl = this.config.pendingPublishUrl;
+    if (this.config.id === 'kuaishou' && options.convertScheduledToImmediate && pendingPublishUrl && job.results.some((result) => (
+      result.platform === 'kuaishou' && result.phase === 'publish'
+      && result.status === 'success' && Boolean(result.scheduledAt)
+    ))) {
+      const pendingPage = await this.browser.open(
+        'kuaishou',
+        pendingPublishUrl,
+      );
+      return this.publishKuaishouPendingNow(job, pendingPage);
+    }
+
     const page = await this.browser.getPlatformPage(this.config.id);
     await page.bringToFront();
+    const beforeUrl = page.url();
+    let clickedBySafeFallback = false;
+
+    await this.ensureImmediateMode(page);
 
     if (this.config.id === 'kuaishou' && job.kind === 'gallery') {
       await this.ensureKuaishouGalleryMusic(page);
@@ -168,12 +339,55 @@ export class PlatformAdapter {
       }
     }
 
-    if (!button) {
+    if (!button && this.config.id === 'xiaohongshu') {
+      const customPublishButton = page.locator('xhs-publish-btn').last();
+      const box = await customPublishButton.boundingBox().catch(() => null);
+      if (box) {
+        await customPublishButton.click({ position: { x: box.width * 0.61, y: box.height * 0.5 } });
+        clickedBySafeFallback = true;
+      }
+    }
+
+    if (!button && !clickedBySafeFallback) {
+      let lowestMatch: { locator: Locator; y: number } | undefined;
+      const patterns = this.config.publishButtonNames.map((pattern) => ({
+        source: pattern.source,
+        flags: pattern.flags,
+      }));
+      for (const frame of page.frames()) {
+        const candidates = frame.locator('button, [role="button"], [class*="button"]');
+        const matches = await candidates.evaluateAll((elements, serializedPatterns) => {
+          const expressions = serializedPatterns.map((pattern) => new RegExp(pattern.source, pattern.flags));
+          return elements.map((element, index) => {
+            const html = element as HTMLElement;
+            const rect = html.getBoundingClientRect();
+            const style = window.getComputedStyle(html);
+            const text = (html.innerText || html.textContent || '').trim();
+            return {
+              index,
+              y: rect.y,
+              width: rect.width,
+              height: rect.height,
+              visible: rect.width > 0 && rect.height > 0
+                && style.display !== 'none' && style.visibility !== 'hidden',
+              matches: expressions.some((expression) => expression.test(text)),
+            };
+          }).filter((item) => item.visible && item.matches
+            && item.width >= 40 && item.height >= 20 && item.height <= 160);
+        }, patterns);
+        const lowestInFrame = matches.sort((left, right) => right.y - left.y)[0];
+        if (lowestInFrame && (!lowestMatch || lowestInFrame.y > lowestMatch.y)) {
+          lowestMatch = { locator: candidates.nth(lowestInFrame.index), y: lowestInFrame.y };
+        }
+      }
+      button = lowestMatch?.locator;
+    }
+
+    if (!button && !clickedBySafeFallback) {
       return this.result('publish', 'needs_verification', page, '没有识别到可用的发布按钮，请在当前页人工确认。');
     }
 
-    const beforeUrl = page.url();
-    await button.click();
+    if (button) await button.click();
     await page.waitForTimeout(5_000);
     const bodyText = (await page.locator('body').innerText().catch(() => '')).slice(0, 20_000);
     const afterUrl = page.url();
@@ -195,6 +409,108 @@ export class PlatformAdapter {
           : success
             ? '平台已显示发布成功、进入审核或跳转到作品管理页。'
             : '已点击发布，但未出现明确的成功状态，请检查当前页。',
+      screenshot,
+    );
+  }
+
+  private async ensureImmediateMode(page: Page): Promise<void> {
+    if (this.config.id === 'xiaohongshu') {
+      const switchInput = page.locator('.post-time-wrapper input[type="checkbox"]').last();
+      if (await switchInput.count() === 0) throw new Error('小红书未找到定时发布开关，无法确认立即发布模式。');
+      const checked = await switchInput.evaluate((element) => (element as HTMLInputElement).checked);
+      if (checked) {
+        await switchInput.evaluate((element) => (element as HTMLInputElement).click());
+        await page.waitForTimeout(500);
+      }
+      const stillChecked = await switchInput.evaluate((element) => (element as HTMLInputElement).checked);
+      if (stillChecked) throw new Error('小红书定时发布开关仍处于开启状态，已停止发布。');
+      return;
+    }
+
+    const label = this.config.id === 'wechat_channels' ? '不定时' : '立即发布';
+    const candidates = page.getByText(label, { exact: true });
+    const count = await candidates.count();
+    for (let index = count - 1; index >= 0; index -= 1) {
+      const candidate = candidates.nth(index);
+      if (!await candidate.isVisible().catch(() => false)) continue;
+      await candidate.evaluate((element) => {
+        const clickable = element.closest(
+          'label, button, [role="radio"], [role="button"], [class*="radio"], [class*="schedule"], [class*="time"]',
+        ) as HTMLElement | null;
+        (clickable ?? element as HTMLElement).click();
+      });
+      await page.waitForTimeout(500);
+      const selected = await candidate.evaluate((element) => {
+        const control = element.closest(
+          'label, button, [role="radio"], [role="button"], [class*="radio"], [class*="schedule"], [class*="time"]',
+        ) as HTMLElement | null ?? element as HTMLElement;
+        const input = (control instanceof HTMLInputElement ? control : control.querySelector('input')) as HTMLInputElement | null;
+        if (input?.checked) return true;
+        return control.getAttribute('aria-checked') === 'true'
+          || control.getAttribute('aria-selected') === 'true'
+          || ['checked', 'active', 'selected'].includes(control.getAttribute('data-state') ?? '')
+          || /(^|[-_\s])(checked|active|selected)([-_\s]|$)/i.test(control.className);
+      }).catch(() => false);
+      if (!selected) throw new Error(`${this.config.shortName}未能确认“${label}”已选中，已停止发布。`);
+      return;
+    }
+    throw new Error(`${this.config.shortName}未找到“${label}”选项，无法确认立即发布模式。`);
+  }
+
+  private async publishKuaishouPendingNow(job: PublishJob, page: Page): Promise<PlatformResult> {
+    await page.waitForTimeout(1_500);
+    const title = job.variants.kuaishou.title;
+    const cards = page.locator('.video-item').filter({ hasText: title });
+    const count = await cards.count();
+    if (count !== 1) {
+      return this.result(
+        'publish',
+        'needs_verification',
+        page,
+        `快手待发布列表中未唯一识别到本条作品（匹配 ${count} 条），为避免误操作已停止。`,
+      );
+    }
+
+    const card = cards.first();
+    const publishNow = card.getByText('立即发布', { exact: true });
+    if (await publishNow.count() === 1 && await publishNow.isVisible().catch(() => false)) {
+      await publishNow.click();
+    } else {
+      const controls = card.locator('.video-item__controls');
+      if (await controls.count() !== 1
+        || !await controls.isVisible().catch(() => false)
+        || !(await controls.innerText().catch(() => '')).includes('立即发布')) {
+        return this.result('publish', 'needs_verification', page, '快手待发布作品未显示“立即发布”，已停止。');
+      }
+      const box = await controls.boundingBox();
+      if (!box) return this.result('publish', 'needs_verification', page, '快手“立即发布”操作区不可点击，已停止。');
+      await controls.click({ position: { x: box.width / 2, y: box.height * 5 / 6 } });
+    }
+    await page.waitForTimeout(700);
+    const confirmButtons = page.getByRole('button', { name: /^确认$|^确定$|^立即发布$/ });
+    const confirmCount = await confirmButtons.count();
+    for (let index = confirmCount - 1; index >= 0; index -= 1) {
+      const confirm = confirmButtons.nth(index);
+      if (await confirm.isVisible().catch(() => false)) {
+        await confirm.click();
+        break;
+      }
+    }
+    await page.waitForTimeout(5_000);
+
+    const bodyText = (await page.locator('body').innerText().catch(() => '')).slice(0, 20_000);
+    const stillScheduled = bodyText.includes(title) && /定时发布\s*[:：]/.test(bodyText);
+    const failure = /发布失败|操作失败|请重试|安全验证|验证码/.test(bodyText);
+    const success = !stillScheduled && !failure
+      && /审核中|已发布|发布成功|提交成功/.test(bodyText);
+    const screenshot = await this.capture(page, `${job.id}-kuaishou-published-now.png`);
+    return this.result(
+      'publish',
+      success ? 'success' : 'needs_verification',
+      page,
+      success
+        ? '快手已将待发布作品改为立即发布，并进入审核或已发布状态。'
+        : '已点击快手“立即发布”，但未获得明确完成状态，请检查当前页。',
       screenshot,
     );
   }

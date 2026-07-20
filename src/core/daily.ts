@@ -1,12 +1,14 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { z } from 'zod';
+import { assertPublicFacingCopy } from './content-policy.js';
 import { projectRoot } from './paths.js';
 import { getDailySchedule, shanghaiDate } from './schedule.js';
 import { platformIds, type AppState, type PlatformId, type PublishJob } from './types.js';
 
 export const contentManifestSchema = z.object({
   kind: z.enum(['video', 'gallery']),
+  watermarkFreeConfirmed: z.boolean().default(false),
   mediaPaths: z.array(z.string().min(1)).min(1),
   title: z.string().min(1),
   body: z.string().min(1),
@@ -35,7 +37,9 @@ async function walkManifestFiles(directory: string): Promise<string[]> {
 }
 
 export async function loadContentManifest(manifestPath: string): Promise<ContentManifest> {
-  return contentManifestSchema.parse(JSON.parse(await fs.readFile(manifestPath, 'utf8')));
+  const manifest = contentManifestSchema.parse(JSON.parse(await fs.readFile(manifestPath, 'utf8')));
+  assertPublicFacingCopy(manifest);
+  return manifest;
 }
 
 function absoluteMediaPaths(manifest: ContentManifest): string[] {
@@ -102,6 +106,20 @@ export function preparedPlatforms(job: PublishJob): PlatformId[] {
 export function publishedPlatforms(job: PublishJob): PlatformId[] {
   return job.targets.filter((platform) => job.results.some((result) => (
     result.platform === platform && result.phase === 'publish' && result.status === 'success'
+  )));
+}
+
+export function immediatelyPublishedPlatforms(job: PublishJob): PlatformId[] {
+  return job.targets.filter((platform) => job.results.some((result) => (
+    result.platform === platform && result.phase === 'publish'
+    && result.status === 'success' && !result.scheduledAt
+  )));
+}
+
+export function scheduledPlatforms(job: PublishJob): PlatformId[] {
+  return job.targets.filter((platform) => job.results.some((result) => (
+    result.platform === platform && result.phase === 'publish'
+    && result.status === 'success' && Boolean(result.scheduledAt)
   )));
 }
 

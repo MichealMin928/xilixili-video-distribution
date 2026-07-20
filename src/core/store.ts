@@ -25,6 +25,7 @@ function initialState(): AppState {
 
 export class Store {
   private writeQueue: Promise<void> = Promise.resolve();
+  private updateQueue: Promise<void> = Promise.resolve();
 
   async read(): Promise<AppState> {
     await fs.mkdir(localDir, { recursive: true, mode: 0o700 });
@@ -53,10 +54,14 @@ export class Store {
   }
 
   async update(mutator: (state: AppState) => void): Promise<AppState> {
-    const state = await this.read();
-    mutator(state);
-    await this.write(state);
-    return state;
+    const operation = this.updateQueue.then(async () => {
+      const state = await this.read();
+      mutator(state);
+      await this.write(state);
+      return state;
+    });
+    this.updateQueue = operation.then(() => undefined, () => undefined);
+    return operation;
   }
 
   async addAudit(event: Omit<AuditEvent, 'id' | 'at'>): Promise<void> {
