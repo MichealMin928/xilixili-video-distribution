@@ -1,0 +1,4 @@
+interface:
+  display_name: "洗哩洗哩内容与发布运营"
+  short_description: "酒店投影内容生产、四平台原生改写、定时发布与安全验收工作流"
+  default_prompt: "Use $xilixili-daily-ops to create an evidence-backed hotel-projector post and operate the four-platform publishing workflow safely."

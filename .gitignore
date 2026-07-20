@@ -1,0 +1,33 @@
+node_modules/
+dist/
+web/dist/
+.local/
+.env*
+!.env.example
+.DS_Store
+
+# 本机运行、浏览器验证与生成产物
+output/*
+!output/playwright/
+output/playwright/*
+!output/playwright/.gitkeep
+outputs/
+tmp/
+.playwright-cli/
+
+# 真实发布素材只保留在本机；仓库仅提供脱敏示例
+content/*
+!content/example-manifest.json
+!content/approved/
+content/approved/*
+!content/approved/README.md
+
+# 内部运营资料与二进制交付物
+小红书账号变更记录.md
+酒店投影与携程合作宣传口径.md
+臻影数字投影资料研究.md
+交付文档/
+records/projector-ad-strategy-*/
+records/标签热度研究-*.md
+records/酒店投影真实项目案例采集模板.md
+records/内容获客操作系统.md

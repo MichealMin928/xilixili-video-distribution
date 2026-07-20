@@ -1,0 +1,49 @@
+{
+  "name": "xilixili-publisher",
+  "version": "0.2.0",
+  "private": true,
+  "description": "洗哩洗哩投影本地四平台统一运营台",
+  "type": "module",
+  "scripts": {
+    "dev": "concurrently -k -n server,web -c yellow,cyan \"npm:dev:server\" \"npm:dev:web\"",
+    "dev:server": "tsx watch src/server/index.ts",
+    "dev:web": "vite --config web/vite.config.ts",
+    "build": "npm run build:web && tsc -p tsconfig.server.json",
+    "build:web": "vite build --config web/vite.config.ts",
+    "start": "node dist/server/index.js",
+    "cli": "tsx src/cli/index.ts",
+    "daily": "tsx src/cli/daily.ts",
+    "weekly": "tsx src/cli/weekly.ts",
+    "engagement": "tsx src/cli/engagement.ts",
+    "cleanup": "tsx src/cli/cleanup.ts",
+    "content:render": "tsx src/cli/content-render.ts",
+    "doctor": "tsx src/cli/index.ts doctor",
+    "system:install": "npm run build && node scripts/system-service.mjs install",
+    "system:status": "node scripts/system-service.mjs status",
+    "system:start": "node scripts/system-service.mjs start",
+    "system:stop": "node scripts/system-service.mjs stop",
+    "system:restart": "node scripts/system-service.mjs restart",
+    "system:uninstall": "node scripts/system-service.mjs uninstall",
+    "check": "tsc --noEmit -p tsconfig.server.json && tsc --noEmit -p web/tsconfig.json",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "express": "^5.1.0",
+    "playwright-core": "^1.55.0",
+    "react": "^19.1.1",
+    "react-dom": "^19.1.1",
+    "zod": "^4.1.5"
+  },
+  "devDependencies": {
+    "@types/express": "^5.0.3",
+    "@types/node": "^22.18.1",
+    "@types/react": "^19.1.12",
+    "@types/react-dom": "^19.1.9",
+    "@vitejs/plugin-react": "^4.7.0",
+    "concurrently": "^9.2.1",
+    "tsx": "^4.20.5",
+    "typescript": "^5.9.2",
+    "vite": "^7.1.4",
+    "vitest": "^3.2.4"
+  }
+}
