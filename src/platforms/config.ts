@@ -6,6 +6,7 @@ export interface PlatformConfig {
   shortName: string;
   homeUrl: string;
   publishUrls: { video: string; gallery: string };
+  pendingPublishUrl?: string;
   loginUrlFragments: string[];
   verificationMarkers: string[];
   titleSelectors: string[];
@@ -71,6 +72,7 @@ export const platformConfigs: Record<PlatformId, PlatformConfig> = {
       video: 'https://cp.kuaishou.com/article/publish/video?tabType=1',
       gallery: 'https://cp.kuaishou.com/article/publish/video?tabType=2',
     },
+    pendingPublishUrl: 'https://cp.kuaishou.com/article/manage/video?status=2',
     loginUrlFragments: ['/login', 'passport.kuaishou.com'],
     verificationMarkers: ['安全验证', '滑动验证', '请完成验证', '验证码'],
     titleSelectors: [

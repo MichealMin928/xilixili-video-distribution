@@ -101,3 +101,55 @@ describe('每日任务增量重试', () => {
     expect(result.preparedNow).toEqual([]);
   });
 });
+
+describe('每日任务发布意图', () => {
+  const scheduledJob = (platform: 'kuaishou' | 'douyin'): PublishJob => ({
+    ...baseJob,
+    id: `job-scheduled-${platform}`,
+    targets: [platform],
+    schedule: {
+      [platform]: {
+        scheduledAt: '2026-07-19T01:00:00.000Z',
+        window: '已到点',
+        rationale: '测试',
+      },
+    },
+    results: [
+      { platform, phase: 'prepare', status: 'success', at: '2026-07-18T01:00:00.000Z', message: 'ok' },
+      {
+        platform,
+        phase: 'publish',
+        status: 'success',
+        scheduledAt: '2026-07-19T01:00:00.000Z',
+        at: '2026-07-18T01:10:00.000Z',
+        message: 'scheduled',
+      },
+    ],
+  });
+
+  it('只有快手明确从定时作品改为立即发布', async () => {
+    const job = scheduledJob('kuaishou');
+    const orchestrator = {
+      store: { getJob: vi.fn().mockResolvedValue(job) },
+      publish: vi.fn().mockResolvedValue([]),
+    };
+
+    await new DailyService(orchestrator as unknown as Orchestrator).publish(job.id, 'kuaishou');
+
+    expect(orchestrator.publish).toHaveBeenCalledWith(job.id, job.id, ['kuaishou'], {
+      convertScheduledToImmediate: true,
+    });
+  });
+
+  it('其他平台已原生定时后不会重复提交', async () => {
+    const job = scheduledJob('douyin');
+    const orchestrator = {
+      store: { getJob: vi.fn().mockResolvedValue(job) },
+      publish: vi.fn(),
+    };
+
+    await expect(new DailyService(orchestrator as unknown as Orchestrator).publish(job.id, 'douyin'))
+      .rejects.toThrow('已提交平台原生定时发布');
+    expect(orchestrator.publish).not.toHaveBeenCalled();
+  });
+});

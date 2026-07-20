@@ -1,15 +1,8 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-
-const platformOrder = ['douyin', 'xiaohongshu', 'kuaishou', 'wechat_channels'] as const;
-type PlatformId = (typeof platformOrder)[number];
+import { request } from './api';
+import { ContentStudio, StudioActivityPanel, type StudioRun } from './ContentStudio';
+import { platformNames, platformOrder, type PlatformId } from './platforms';
 const scheduleOrder: PlatformId[] = ['wechat_channels', 'kuaishou', 'douyin', 'xiaohongshu'];
-
-const platformNames: Record<PlatformId, string> = {
-  douyin: '抖音',
-  xiaohongshu: '小红书',
-  kuaishou: '快手',
-  wechat_channels: '视频号',
-};
 
 const tagHeatResearch = [
   { tag: '民宿经营', sampleEngagement: 845, medianEngagement: 53.5, score: 100 },
@@ -34,6 +27,7 @@ interface Result {
   phase: 'prepare' | 'publish';
   status: 'success' | 'failed' | 'needs_verification';
   at: string;
+  scheduledAt?: string;
   message: string;
 }
 
@@ -42,6 +36,7 @@ interface Job {
   createdAt: string;
   status: string;
   kind: 'video' | 'gallery';
+  watermarkFreeConfirmed?: boolean;
   mediaPaths: string[];
   baseCopy: { title: string; body: string; hashtags: string[] };
   targets: PlatformId[];
@@ -143,16 +138,6 @@ const statusCopy: Record<LoginStatus, string> = {
   needs_verification: '需验证',
 };
 
-async function request<T>(path: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(path, {
-    ...init,
-    headers: { 'content-type': 'application/json', ...init?.headers },
-  });
-  const body = await response.json();
-  if (!response.ok) throw new Error(body.error ?? `HTTP ${response.status}`);
-  return body;
-}
-
 const dateTime = (value: string) => new Intl.DateTimeFormat('zh-CN', {
   month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false,
 }).format(new Date(value));
@@ -166,6 +151,8 @@ const todayInShanghai = () => new Intl.DateTimeFormat('en-CA', {
 }).format(new Date());
 
 export function App() {
+  const [view, setView] = useState<'studio' | 'operations'>('studio');
+  const [studioRun, setStudioRun] = useState<StudioRun>();
   const [state, setState] = useState<State>();
   const [engagement, setEngagement] = useState<EngagementState>();
   const [busy, setBusy] = useState<string>();
@@ -174,33 +161,54 @@ export function App() {
   const [title, setTitle] = useState('');
   const [body, setBody] = useState('');
   const [media, setMedia] = useState('');
+  const [watermarkFreeConfirmed, setWatermarkFreeConfirmed] = useState(false);
   const [tags, setTags] = useState('民宿经营、江西酒店、酒店投影、酒店供应链');
   const [targets, setTargets] = useState<PlatformId[]>([...platformOrder]);
   const [confirmations, setConfirmations] = useState<Record<string, string>>({});
   const [scheduleDate, setScheduleDate] = useState(todayInShanghai);
   const [schedule, setSchedule] = useState<DailySchedule>();
 
-  const refresh = useCallback(async () => {
-    const [nextState, nextEngagement] = await Promise.all([
-      request<State>('/api/state'),
-      request<EngagementState>('/api/engagement/status'),
-    ]);
+  const refreshState = useCallback(async (signal?: AbortSignal) => {
+    const nextState = await request<State>('/api/state', { signal });
     setState(nextState);
+  }, []);
+
+  const refreshEngagement = useCallback(async (signal?: AbortSignal) => {
+    const nextEngagement = await request<EngagementState>('/api/engagement/status', { signal });
     setEngagement(nextEngagement);
   }, []);
 
+  const refresh = useCallback(async (signal?: AbortSignal) => {
+    const requests = [refreshState(signal)];
+    if (view === 'operations') requests.push(refreshEngagement(signal));
+    await Promise.all(requests);
+  }, [refreshEngagement, refreshState, view]);
+
   useEffect(() => {
-    refresh().catch((reason) => setError(String(reason)));
+    const controller = new AbortController();
+    const report = (reason: unknown) => {
+      if (!(reason instanceof DOMException && reason.name === 'AbortError')) setError(String(reason));
+    };
+    if (!busy) refresh(controller.signal).catch(report);
     const timer = window.setInterval(() => {
-      if (!busy) refresh().catch(() => undefined);
+      if (!busy) refresh(controller.signal).catch(report);
     }, 5_000);
-    return () => window.clearInterval(timer);
+    return () => {
+      controller.abort();
+      window.clearInterval(timer);
+    };
   }, [busy, refresh]);
 
   useEffect(() => {
-    request<DailySchedule>(`/api/schedule?date=${encodeURIComponent(scheduleDate)}`)
+    const controller = new AbortController();
+    request<DailySchedule>(`/api/schedule?date=${encodeURIComponent(scheduleDate)}`, { signal: controller.signal })
       .then(setSchedule)
-      .catch((reason) => setError(reason instanceof Error ? reason.message : String(reason)));
+      .catch((reason) => {
+        if (!(reason instanceof DOMException && reason.name === 'AbortError')) {
+          setError(reason instanceof Error ? reason.message : String(reason));
+        }
+      });
+    return () => controller.abort();
   }, [scheduleDate]);
 
   const run = async (label: string, action: () => Promise<unknown>) => {
@@ -259,6 +267,7 @@ export function App() {
       method: 'POST',
       body: JSON.stringify({
         kind,
+        watermarkFreeConfirmed,
         title,
         body,
         mediaPaths: media.split('\n').map((item) => item.trim()).filter(Boolean),
@@ -270,6 +279,7 @@ export function App() {
     setTitle('');
     setBody('');
     setMedia('');
+    setWatermarkFreeConfirmed(false);
   });
 
   return (
@@ -279,9 +289,13 @@ export function App() {
           <span className="brand-mark" aria-hidden="true" />
           <div>
             <strong>洗哩洗哩</strong>
-            <span>四平台运营台</span>
+            <span>视频分发</span>
           </div>
         </div>
+        <nav className="workspace-nav" aria-label="工作台视图">
+          <button type="button" className={view === 'studio' ? 'active' : ''} onClick={() => setView('studio')}>内容选片台</button>
+          <button type="button" className={view === 'operations' ? 'active' : ''} onClick={() => setView('operations')}>发布管理</button>
+        </nav>
         <div className="system-status">
           <span className="live-dot" />
           本机模式 · {loggedIn}/4 已登录
@@ -320,6 +334,13 @@ export function App() {
       </aside>
 
       <main className="workspace">
+        {view === 'studio' ? (
+          <ContentStudio
+            onRun={setStudioRun}
+            onOpenOperations={() => setView('operations')}
+          />
+        ) : (
+          <>
         <div className="workspace-head">
           <div>
             <p className="eyebrow">新内容</p>
@@ -482,6 +503,16 @@ export function App() {
               </section>
             </div>
           </div>
+          {kind === 'video' && (
+            <label className="watermark-check">
+              <input
+                type="checkbox"
+                checked={watermarkFreeConfirmed}
+                onChange={(event) => setWatermarkFreeConfirmed(event.target.checked)}
+              />
+              <span>已完整确认：视频不含平台水印、AI 生成水印、网址或二维码</span>
+            </label>
+          )}
           <div className="target-line">
             <span>发布到</span>
             <div>
@@ -491,7 +522,7 @@ export function App() {
                 </button>
               ))}
             </div>
-            <button className="primary-action" disabled={!title || !body || !media || !targets.length || Boolean(busy)} onClick={createJob}>
+            <button className="primary-action" disabled={!title || !body || !media || !targets.length || (kind === 'video' && !watermarkFreeConfirmed) || Boolean(busy)} onClick={createJob}>
               建立发布任务
             </button>
           </div>
@@ -506,11 +537,15 @@ export function App() {
             <span>{state?.jobs.length ?? 0} 个任务</span>
           </div>
           {!state?.jobs.length && <p className="empty-state">还没有任务。上方建立第一条内容后，会在这里显示四平台进度。</p>}
-          {state?.jobs.slice(0, 8).map((job) => (
-            <article className="job-row" key={job.id}>
+          {state?.jobs.slice(0, 8).map((job) => {
+            const preparedCount = job.targets.filter((platform) => job.results.some((result) => (
+              result.platform === platform && result.phase === 'prepare' && result.status === 'success'
+            ))).length;
+            return <article className="job-row" key={job.id}>
               <div className="job-meta">
                 <span>{job.kind === 'video' ? '视频' : '图文'}</span>
                 <small>{dateTime(job.createdAt)}</small>
+                {job.kind === 'video' && <small>{job.watermarkFreeConfirmed ? '已确认无水印' : '待确认无水印'}</small>}
               </div>
               <div className="job-copy">
                 <h3>{job.baseCopy.title}</h3>
@@ -531,7 +566,7 @@ export function App() {
               </div>
               <div className="job-controls">
                 <button className="prepare-button" disabled={Boolean(busy)} onClick={() => run(`正在预填 ${job.id}`, () => request(`/api/jobs/${job.id}/prepare`, { method: 'POST', body: '{}' }))}>
-                  预填四平台
+                  {preparedCount ? `重试未完成平台（${preparedCount}/${job.targets.length}）` : '预填目标平台'}
                 </button>
                 <input
                   aria-label={`${job.id} 发布确认`}
@@ -542,31 +577,50 @@ export function App() {
                 <div className="platform-publish-actions">
                   {job.targets.map((id) => {
                     const published = job.results.some((result) => result.platform === id
-                      && result.phase === 'publish' && result.status === 'success');
+                      && result.phase === 'publish' && result.status === 'success' && !result.scheduledAt);
+                    const scheduled = job.results.some((result) => result.platform === id
+                      && result.phase === 'publish' && result.status === 'success' && Boolean(result.scheduledAt));
                     const time = job.schedule?.[id] ? publishingTime(job.schedule[id]!.scheduledAt) : undefined;
                     return (
                       <button
                         key={id}
                         className="publish-button"
-                        disabled={published || confirmations[job.id] !== job.id || Boolean(busy)}
+                        disabled={published || (scheduled && id !== 'kuaishou') || confirmations[job.id] !== job.id || Boolean(busy)}
                         title={job.schedule?.[id]?.rationale}
                         onClick={() => run(`正在发布 ${job.id} 到${platformNames[id]}`, () => request(`/api/jobs/${job.id}/publish`, {
                           method: 'POST',
-                          body: JSON.stringify({ confirmation: confirmations[job.id], targets: [id] }),
+                          body: JSON.stringify({
+                            confirmation: confirmations[job.id],
+                            targets: [id],
+                            convertScheduledToImmediate: scheduled && id === 'kuaishou',
+                          }),
                         }))}
                       >
-                        {published ? `${platformNames[id]}已发布` : `${time ? `${time} · ` : ''}${platformNames[id]}`}
+                        {published
+                          ? `${platformNames[id]}已发布`
+                          : scheduled
+                            ? id === 'kuaishou' ? '快手改为立即发布' : `${platformNames[id]}已定时`
+                            : `${time ? `${time} · ` : ''}${platformNames[id]}`}
                       </button>
                     );
                   })}
                 </div>
               </div>
-            </article>
-          ))}
+            </article>;
+          })}
         </section>
+          </>
+        )}
       </main>
 
-      <aside className="activity-panel">
+      {view === 'studio' ? (
+        <StudioActivityPanel
+          run={studioRun}
+          error={error}
+          onOpenOperations={() => setView('operations')}
+        />
+      ) : (
+        <aside className="activity-panel">
         <div className="activity-head">
           <p className="eyebrow">操作存档</p>
           <span>{busy ?? '系统就绪'}</span>
@@ -584,7 +638,8 @@ export function App() {
           ))}
           {!state?.audit.length && <p className="empty-state">登录检查、内容预填和发布结果都会自动留存在这里。</p>}
         </div>
-      </aside>
+        </aside>
+      )}
     </div>
   );
 }

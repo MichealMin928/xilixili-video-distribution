@@ -24,6 +24,7 @@ Use the pattern **one problem + one piece of evidence + one action**. Put topics
 - Put scope limits near the claim they qualify.
 - End with a concrete checklist, measurement form, or project-intake packet rather than a generic “contact us.”
 - Export all PNG pages and a seven-page overview, then inspect the overview and critical pages at full size.
+- For video, watch the full final export with audio. Reject any platform watermark, AI-generated watermark, website, QR code, or unintended mute/track replacement before approval.
 
 ## Create four native platform cards
 
@@ -35,6 +36,7 @@ Share facts, evidence, media, and claim boundaries. Rewrite the hook, order, tit
 - WeChat Channels: complete project context and handoff; three tags.
 
 Do not treat base-copy truncation as a native rewrite. Keep the base manifest portable, and store platform editorial intent in `平台文案.md`.
+Keep internal production narration out of public copy. Phrases such as “这个视频展示了……” belong in review notes, not captions or descriptions.
 
 ## Gate facts and approval
 

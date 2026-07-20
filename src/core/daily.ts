@@ -109,6 +109,20 @@ export function publishedPlatforms(job: PublishJob): PlatformId[] {
   )));
 }
 
+export function immediatelyPublishedPlatforms(job: PublishJob): PlatformId[] {
+  return job.targets.filter((platform) => job.results.some((result) => (
+    result.platform === platform && result.phase === 'publish'
+    && result.status === 'success' && !result.scheduledAt
+  )));
+}
+
+export function scheduledPlatforms(job: PublishJob): PlatformId[] {
+  return job.targets.filter((platform) => job.results.some((result) => (
+    result.platform === platform && result.phase === 'publish'
+    && result.status === 'success' && Boolean(result.scheduledAt)
+  )));
+}
+
 export function assertPublishTime(job: PublishJob, platform: PlatformId, now = new Date()): void {
   const scheduledAt = job.schedule?.[platform]?.scheduledAt;
   if (scheduledAt && now.getTime() < new Date(scheduledAt).getTime()) {

@@ -7,6 +7,10 @@ import type { AccountState, PlatformResult, PublishJob } from '../core/types.js'
 import { BrowserManager } from '../browser/manager.js';
 import type { PlatformConfig } from './config.js';
 
+export interface PublishOptions {
+  convertScheduledToImmediate?: boolean;
+}
+
 async function firstVisible(page: Page, selectors: string[]): Promise<Locator | undefined> {
   for (const selector of selectors) {
     const locator = page.locator(selector).first();
@@ -286,14 +290,15 @@ export class PlatformAdapter {
     return ranked.length ? candidates.nth(ranked[0]!.index) : undefined;
   }
 
-  async publish(job: PublishJob): Promise<PlatformResult> {
-    if (this.config.id === 'kuaishou' && job.results.some((result) => (
+  async publish(job: PublishJob, options: PublishOptions = {}): Promise<PlatformResult> {
+    const pendingPublishUrl = this.config.pendingPublishUrl;
+    if (this.config.id === 'kuaishou' && options.convertScheduledToImmediate && pendingPublishUrl && job.results.some((result) => (
       result.platform === 'kuaishou' && result.phase === 'publish'
       && result.status === 'success' && Boolean(result.scheduledAt)
     ))) {
       const pendingPage = await this.browser.open(
         'kuaishou',
-        'https://cp.kuaishou.com/article/manage/video?status=2',
+        pendingPublishUrl,
       );
       return this.publishKuaishouPendingNow(job, pendingPage);
     }
@@ -345,17 +350,34 @@ export class PlatformAdapter {
 
     if (!button && !clickedBySafeFallback) {
       let lowestMatch: { locator: Locator; y: number } | undefined;
+      const patterns = this.config.publishButtonNames.map((pattern) => ({
+        source: pattern.source,
+        flags: pattern.flags,
+      }));
       for (const frame of page.frames()) {
-        const candidates = frame.locator('button, [role="button"], [class*="button"], div, span');
-        const count = await candidates.count();
-        for (let index = 0; index < count; index += 1) {
-          const candidate = candidates.nth(index);
-          const text = (await candidate.innerText().catch(() => '')).trim();
-          const matches = this.config.publishButtonNames.some((name) => name.test(text));
-          if (!matches || !await candidate.isVisible().catch(() => false)) continue;
-          const box = await candidate.boundingBox().catch(() => null);
-          if (!box || box.width < 40 || box.height < 20 || box.height > 160) continue;
-          if (!lowestMatch || box.y > lowestMatch.y) lowestMatch = { locator: candidate, y: box.y };
+        const candidates = frame.locator('button, [role="button"], [class*="button"]');
+        const matches = await candidates.evaluateAll((elements, serializedPatterns) => {
+          const expressions = serializedPatterns.map((pattern) => new RegExp(pattern.source, pattern.flags));
+          return elements.map((element, index) => {
+            const html = element as HTMLElement;
+            const rect = html.getBoundingClientRect();
+            const style = window.getComputedStyle(html);
+            const text = (html.innerText || html.textContent || '').trim();
+            return {
+              index,
+              y: rect.y,
+              width: rect.width,
+              height: rect.height,
+              visible: rect.width > 0 && rect.height > 0
+                && style.display !== 'none' && style.visibility !== 'hidden',
+              matches: expressions.some((expression) => expression.test(text)),
+            };
+          }).filter((item) => item.visible && item.matches
+            && item.width >= 40 && item.height >= 20 && item.height <= 160);
+        }, patterns);
+        const lowestInFrame = matches.sort((left, right) => right.y - left.y)[0];
+        if (lowestInFrame && (!lowestMatch || lowestInFrame.y > lowestMatch.y)) {
+          lowestMatch = { locator: candidates.nth(lowestInFrame.index), y: lowestInFrame.y };
         }
       }
       button = lowestMatch?.locator;
@@ -394,10 +416,14 @@ export class PlatformAdapter {
   private async ensureImmediateMode(page: Page): Promise<void> {
     if (this.config.id === 'xiaohongshu') {
       const switchInput = page.locator('.post-time-wrapper input[type="checkbox"]').last();
-      if (await switchInput.count() > 0) {
-        const checked = await switchInput.evaluate((element) => (element as HTMLInputElement).checked).catch(() => false);
-        if (checked) await switchInput.evaluate((element) => (element as HTMLInputElement).click());
+      if (await switchInput.count() === 0) throw new Error('小红书未找到定时发布开关，无法确认立即发布模式。');
+      const checked = await switchInput.evaluate((element) => (element as HTMLInputElement).checked);
+      if (checked) {
+        await switchInput.evaluate((element) => (element as HTMLInputElement).click());
+        await page.waitForTimeout(500);
       }
+      const stillChecked = await switchInput.evaluate((element) => (element as HTMLInputElement).checked);
+      if (stillChecked) throw new Error('小红书定时发布开关仍处于开启状态，已停止发布。');
       return;
     }
 
@@ -414,8 +440,21 @@ export class PlatformAdapter {
         (clickable ?? element as HTMLElement).click();
       });
       await page.waitForTimeout(500);
-      break;
+      const selected = await candidate.evaluate((element) => {
+        const control = element.closest(
+          'label, button, [role="radio"], [role="button"], [class*="radio"], [class*="schedule"], [class*="time"]',
+        ) as HTMLElement | null ?? element as HTMLElement;
+        const input = (control instanceof HTMLInputElement ? control : control.querySelector('input')) as HTMLInputElement | null;
+        if (input?.checked) return true;
+        return control.getAttribute('aria-checked') === 'true'
+          || control.getAttribute('aria-selected') === 'true'
+          || ['checked', 'active', 'selected'].includes(control.getAttribute('data-state') ?? '')
+          || /(^|[-_\s])(checked|active|selected)([-_\s]|$)/i.test(control.className);
+      }).catch(() => false);
+      if (!selected) throw new Error(`${this.config.shortName}未能确认“${label}”已选中，已停止发布。`);
+      return;
     }
+    throw new Error(`${this.config.shortName}未找到“${label}”选项，无法确认立即发布模式。`);
   }
 
   private async publishKuaishouPendingNow(job: PublishJob, page: Page): Promise<PlatformResult> {
@@ -463,7 +502,7 @@ export class PlatformAdapter {
     const stillScheduled = bodyText.includes(title) && /定时发布\s*[:：]/.test(bodyText);
     const failure = /发布失败|操作失败|请重试|安全验证|验证码/.test(bodyText);
     const success = !stillScheduled && !failure
-      && (/审核中|已发布|发布成功|提交成功/.test(bodyText) || !bodyText.includes(title));
+      && /审核中|已发布|发布成功|提交成功/.test(bodyText);
     const screenshot = await this.capture(page, `${job.id}-kuaishou-published-now.png`);
     return this.result(
       'publish',

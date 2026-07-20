@@ -1,8 +1,8 @@
 {
   "name": "xilixili-publisher",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "private": true,
-  "description": "洗哩洗哩投影本地四平台统一运营台",
+  "description": "洗哩洗哩视频分发本地四平台运营工具",
   "type": "module",
   "scripts": {
     "dev": "concurrently -k -n server,web -c yellow,cyan \"npm:dev:server\" \"npm:dev:web\"",
